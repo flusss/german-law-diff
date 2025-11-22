@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>德国法律版本对比工具</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; background-color: #f8f9fa; color: #212529; }
+        .container { max-width: 1200px; margin: 2rem auto; padding: 2rem; background-color: #fff; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #343a40; }
+        .controls { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 2rem; padding: 1.5rem; background-color: #e9ecef; border-radius: 8px; }
+        .control-group { flex: 1; min-width: 200px; }
+        label { font-weight: bold; display: block; margin-bottom: 0.5rem; }
+        select, button { width: 100%; padding: 0.75rem; border: 1px solid #ced4da; border-radius: 4px; font-size: 1rem; }
+        button { background-color: #007bff; color: white; border: none; cursor: pointer; transition: background-color 0.2s; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        .comparison-area { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+        .version-column { border: 1px solid #dee2e6; border-radius: 8px; background-color: #fff; }
+        .version-column h4 { margin: 0; padding: 1rem; background-color: #f1f3f5; border-bottom: 1px solid #dee2e6; border-radius: 8px 8px 0 0; }
+        .content { padding: 1rem; line-height: 1.6; font-family: "Courier New", Courier, monospace; }
+        .diff-deleted { background-color: #ffebe9; text-decoration: line-through; }
+        .diff-inserted { background-color: #e6ffec; }
+        #error-message { color: #dc3545; text-align: center; margin-top: 1rem; }
+        .lang-switcher { display: flex; align-items: center; gap: 0.5rem; background-color: #fff; padding: 5px; border-radius: 20px; border: 1px solid #ced4da; }
+        .lang-switcher label { cursor: pointer; padding: 0.25rem 0.75rem; border-radius: 15px; transition: all 0.2s; user-select: none; }
+        .lang-switcher input { display: none; }
+        .lang-switcher input:checked + label { background-color: #007bff; color: white; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Synopse / 差异对比</h1>
+    <div class="controls">
+        <div class="control-group" style="flex: 0.5;">
+            <label>语言 (Sprache)</label>
+            <div class="lang-switcher">
+                <input type="radio" id="lang-de" name="language" value="de" checked>
+                <label for="lang-de">Deutsch</label>
+                <input type="radio" id="lang-zh" name="language" value="zh">
+                <label for="lang-zh">中文</label>
+            </div>
+        </div>
+        <div class="control-group">
+            <label for="law-select">法律 (Gesetz)</label>
+            <select id="law-select"></select>
+        </div>
+        <div class="control-group">
+            <label for="paragraph-select">法条 (Paragraph)</label>
+            <select id="paragraph-select" disabled></select>
+        </div>
+        <div class="control-group">
+            <label for="v1-select">旧版本 (Alte Fassung)</label>
+            <select id="v1-select" disabled></select>
+        </div>
+        <div class="control-group">
+            <label for="v2-select">新版本 (Neue Fassung)</label>
+            <select id="v2-select" disabled></select>
+        </div>
+        <div class="control-group">
+            <label>&nbsp;</label>
+            <button id="compare-btn" disabled>对比 (Vergleichen)</button>
+        </div>
+    </div>
+
+    <div id="error-message"></div>
+
+    <div class="comparison-area">
+        <div class="version-column">
+            <h4 id="v1-title">旧版本 (a.F.)</h4>
+            <div id="v1-content" class="content"></div>
+        </div>
+        <div class="version-column">
+            <h4 id="v2-title">新版本 (n.F.)</h4>
+            <div id="v2-content" class="content"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // DOM 元素获取
+    const lawSelect = document.getElementById('law-select');
+    const paragraphSelect = document.getElementById('paragraph-select');
+    const v1Select = document.getElementById('v1-select');
+    const v2Select = document.getElementById('v2-select');
+    const compareBtn = document.getElementById('compare-btn');
+    const v1Title = document.getElementById('v1-title');
+    const v2Title = document.getElementById('v2-title');
+    const v1Content = document.getElementById('v1-content');
+    const v2Content = document.getElementById('v2-content');
+    const errorMessage = document.getElementById('error-message');
+
+    // 翻译文本
+    const translations = {
+        de: {
+            title: "Synopse / 差异对比",
+            lawLabel: "Gesetz",
+            paragraphLabel: "Paragraph",
+            oldVersionLabel: "Alte Fassung",
+            newVersionLabel: "Neue Fassung",
+            compareButton: "Vergleichen",
+            oldVersionTitle: "Alte Fassung (a.F.)",
+            newVersionTitle: "Neue Fassung (n.F.)",
+            selectLawPlaceholder: "-- Bitte Gesetz wählen --",
+            selectParagraphPlaceholder: "-- Bitte Paragraph wählen --",
+            selectOldVersionPlaceholder: "-- Bitte alte Fassung wählen --",
+            selectNewVersionPlaceholder: "-- Bitte neue Fassung wählen --",
+        }
+    };
+    // 用于存储当前查询结果和语言状态
+    let currentComparisonData = null;
+    let currentLanguage = 'de';
+
+    // 页面加载时，获取所有法律列表
+    document.addEventListener('DOMContentLoaded', async () => {
+        try {
+            const response = await fetch('/api/laws');
+            const laws = await response.json();
+            lawSelect.innerHTML = `<option value="">${translations.de.selectLawPlaceholder}</option>`;
+            laws.forEach(law => {
+                lawSelect.innerHTML += `<option value="${law.short_name}">${law.short_name} - ${law.full_name_de}</option>`;
+            });
+        } catch (error) {
+            showError("无法加载法律列表。");
+        }
+    });
+
+    // 当选择一个法律时，获取其版本和法条
+    lawSelect.addEventListener('change', async () => {
+        const law = lawSelect.value;
+        resetSelects([paragraphSelect, v1Select, v2Select]);
+        if (!law) return;
+
+        try {
+            const response = await fetch(`/api/law/${law}/details`);
+            const details = await response.json();
+            
+            // 填充法条下拉框
+            populateSelect(paragraphSelect, details.paragraph_numbers, translations.de.selectParagraphPlaceholder);
+            
+            // 填充版本下拉框
+            const versionOptions = details.versions.map(v => ({ value: v.date, text: v.description }));
+            populateSelect(v1Select, versionOptions, translations.de.selectOldVersionPlaceholder);
+            populateSelect(v2Select, versionOptions, translations.de.selectNewVersionPlaceholder);
+
+            // 默认选择最新的两个版本
+            if (details.versions.length >= 2) {
+                v2Select.value = details.versions[0].date;
+                v1Select.value = details.versions[1].date;
+            }
+            
+            checkAllSelections();
+        } catch (error) {
+            showError(`无法加载 ${law} 的详细信息。`);
+        }
+    });
+
+    // 监听所有下拉框的变化
+    [paragraphSelect, v1Select, v2Select].forEach(select => {
+        select.addEventListener('change', checkAllSelections);
+    });
+
+    // 监听语言切换
+    document.querySelectorAll('input[name="language"]').forEach(radio => {
+        radio.addEventListener('change', (event) => {
+            currentLanguage = event.target.value;
+            // 如果已有对比结果，则直接更新视图，无需重新请求
+            if (currentComparisonData) {
+                renderContent();
+                updateUIText(); // 确保标题也更新
+            }
+        });
+    });
+
+    // 对比按钮点击事件
+    compareBtn.addEventListener('click', async () => {
+        const law = lawSelect.value;
+        const paragraph = paragraphSelect.value;
+        const v1Date = v1Select.value;
+        const v2Date = v2Select.value;
+
+        if (v1Date >= v2Date) {
+            showError("旧版本日期必须早于新版本日期。");
+            return;
+        }
+        
+        clearResults();
+        showError(""); // 清除错误信息
+        currentComparisonData = null; // 清除旧数据
+
+        try {
+            // 注意：对法条编号进行编码，以防包含特殊字符
+            const encodedParagraph = encodeURIComponent(paragraph);
+            const response = await fetch(`/api/synopsis/${law}/${v1Date}/${v2Date}/${encodedParagraph}`);
+            const data = await response.json();
+
+            if (response.ok) {
+                currentComparisonData = data; // 保存新数据
+                renderContent(); // 渲染内容
+            } else {
+                showError(data.error || "发生未知错误。");
+            }
+        } catch (error) {
+            showError("请求对比数据时出错。");
+        }
+    });
+
+    // --- 辅助函数 ---
+    function populateSelect(selectElement, options, placeholder) {
+        selectElement.innerHTML = `<option value="">${placeholder}</option>`;
+        options.forEach(opt => {
+            const value = typeof opt === 'object' ? opt.value : opt;
+            const text = typeof opt === 'object' ? opt.text : opt;
+            selectElement.innerHTML += `<option value="${value}">${text}</option>`;
+        });
+        selectElement.disabled = false;
+    }
+
+    function resetSelects(selects) {
+        selects.forEach(s => {
+            s.innerHTML = '';
+            s.disabled = true;
+        });
+        compareBtn.disabled = true;
+    }
+
+    function checkAllSelections() {
+        const allSelected = lawSelect.value && paragraphSelect.value && v1Select.value && v2Select.value;
+        compareBtn.disabled = !allSelected;
+    }
+    
+    function renderContent() {
+        if (!currentComparisonData) return;
+
+        const langKey = currentLanguage === 'zh' ? 'content_html_zh' : 'content_html_de';
+
+        const v1DateStr = currentComparisonData.version_1.date;
+        const v2DateStr = currentComparisonData.version_2.date;
+
+        v1Title.innerText = `${translations[currentLanguage]?.oldVersionTitle || translations.de.oldVersionTitle} ${v1DateStr}`;
+        v2Title.innerText = `${translations[currentLanguage]?.newVersionTitle || translations.de.newVersionTitle} ${v2DateStr}`;
+
+        v1Content.innerHTML = currentComparisonData.version_1[langKey];
+        v2Content.innerHTML = currentComparisonData.version_2[langKey];
+    }
+
+    function updateUIText() {
+        const lang = currentLanguage;
+        const t = translations[lang] || translations.de; // 回退到德语
+
+        document.querySelector('h1').innerText = t.title;
+        document.querySelector('label[for="law-select"]').innerText = t.lawLabel;
+        document.querySelector('label[for="paragraph-select"]').innerText = t.paragraphLabel;
+        document.querySelector('label[for="v1-select"]').innerText = t.oldVersionLabel;
+        document.querySelector('label[for="v2-select"]').innerText = t.newVersionLabel;
+        compareBtn.innerText = t.compareButton;
+    }
+
+    function clearResults() {
+        v1Title.innerText = translations[currentLanguage]?.oldVersionTitle || translations.de.oldVersionTitle;
+        v2Title.innerText = translations[currentLanguage]?.newVersionTitle || translations.de.newVersionTitle;
+        v1Content.innerHTML = '';
+        v2Content.innerHTML = '';
+    }
+
+    function showError(message) {
+        errorMessage.innerText = message;
+    }
+</script>
+
+</body>
+</html>
